@@ -26,8 +26,8 @@ from optuna.samplers._base import _process_constraints_after_trial
 from optuna.samplers._base import BaseSampler
 from optuna.samplers._lazy_random_state import LazyRandomState
 from optuna.samplers._random import RandomSampler
-from optuna.samplers._tpe.parzen_estimator import _ParzenEstimator
-from optuna.samplers._tpe.parzen_estimator import _ParzenEstimatorParameters
+from .parzen_estimator import _ParzenEstimator
+from .parzen_estimator import _ParzenEstimatorParameters
 from optuna.search_space import IntersectionSearchSpace
 from optuna.search_space.group_decomposed import _GroupDecomposedSearchSpace
 from optuna.search_space.group_decomposed import _SearchSpaceGroup
@@ -323,6 +323,7 @@ class TPESampler(BaseSampler):
             dict[str, Callable[[CategoricalChoiceType, CategoricalChoiceType], float]] | None
         ) = None,
         bw_multivariate: bool = False,
+        prior_mu: bool = True,
     ) -> None:
         if not consider_prior:
             msg = _deprecated._DEPRECATION_WARNING_TEMPLATE.format(
@@ -340,6 +341,7 @@ class TPESampler(BaseSampler):
             weights=weights,
             multivariate=bw_multivariate,
             categorical_distance_func=categorical_distance_func or {},
+            prior_mu=prior_mu,
         )
         self._n_startup_trials = n_startup_trials
         self._n_ei_candidates = n_ei_candidates
