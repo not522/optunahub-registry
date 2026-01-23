@@ -324,6 +324,7 @@ class TPESampler(BaseSampler):
         ) = None,
         bw_multivariate: bool = False,
         prior_mu: bool = True,
+        weights_below: str = "mo",
     ) -> None:
         if not consider_prior:
             msg = _deprecated._DEPRECATION_WARNING_TEMPLATE.format(
@@ -358,6 +359,7 @@ class TPESampler(BaseSampler):
         self._search_space = IntersectionSearchSpace(include_pruned=True)
         self._constant_liar = constant_liar
         self._constraints_func = constraints_func
+        self._weights_below = weights_below
         # NOTE(nabenabe0928): Users can overwrite _ParzenEstimator to customize the TPE behavior.
         self._parzen_estimator_cls = _ParzenEstimator
 
@@ -572,16 +574,27 @@ class TPESampler(BaseSampler):
     ) -> _ParzenEstimator:
         observations = self._get_internal_repr(trials, search_space)
         if handle_below and study._is_multi_objective():
-            param_mask_below = [
-                search_space.keys() <= self._get_params(trial).keys() for trial in trials
-            ]
-            weights_below = _calculate_weights_below_for_multi_objective(
-                study, trials, self._constraints_func
-            )[param_mask_below]
-            assert np.isfinite(weights_below).all()
-            mpe = self._parzen_estimator_cls(
-                observations, search_space, self._parzen_estimator_parameters, weights_below
-            )
+            if self._weights_below == "mo":
+                param_mask_below = [
+                    search_space.keys() <= self._get_params(trial).keys() for trial in trials
+                ]
+                weights_below = _calculate_weights_below_for_multi_objective(
+                    study, trials, self._constraints_func
+                )[param_mask_below]
+                assert np.isfinite(weights_below).all()
+                mpe = self._parzen_estimator_cls(
+                    observations, search_space, self._parzen_estimator_parameters, weights_below
+                )
+            elif self._weights_below == "hyperopt":
+                mpe = self._parzen_estimator_cls(
+                    observations, search_space, self._parzen_estimator_parameters
+                )
+            elif self._weights_below == "contrib":
+                mpe = self._parzen_estimator_cls(
+                    observations, search_space, self._parzen_estimator_parameters, self.contrib_weights(trials)
+                )
+            else:
+                raise NotImplementedError
         else:
             mpe = self._parzen_estimator_cls(
                 observations, search_space, self._parzen_estimator_parameters
@@ -591,6 +604,27 @@ class TPESampler(BaseSampler):
             raise RuntimeError("_parzen_estimator_cls must override _ParzenEstimator.")
 
         return mpe
+
+    def contrib_weights(
+        self,
+        trials: list[FrozenTrial],
+    ) -> np.ndarray:
+        if len(trials) == 1:
+            return np.ones(1)
+        vals = np.asarray([t.values for t in trials])
+        ref_point = _get_reference_point(vals)
+        weights = np.zeros(len(trials))
+        perm = np.arange(len(trials))
+        for _ in range(100):
+            self._rng.rng.shuffle(perm)
+            for i in range(len(trials)):
+                hv = np.prod(ref_point - vals[perm[i]])
+                limited_sols = np.maximum(vals[perm][:i], vals[perm[i]][np.newaxis, :])
+                hv -= compute_hypervolume(limited_sols, ref_point, assume_pareto=False)
+                weights[perm[i]] += hv
+        weights /= weights.sum()
+        weights *= len(trials)
+        return weights
 
     def _compute_acquisition_func(
         self,
