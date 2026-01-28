@@ -54,6 +54,10 @@ def default_gamma(x: int) -> int:
     return min(math.ceil(0.1 * x), 25)
 
 
+def noupper_gamma(x: int) -> int:
+    return math.ceil(0.1 * x)
+
+
 def hyperopt_default_gamma(x: int) -> int:
     return min(math.ceil(0.25 * x**0.5), 25)
 
@@ -67,6 +71,12 @@ def default_weights(x: int) -> np.ndarray:
         ramp = np.linspace(1.0 / x, 1.0, num=x - 25)
         flat = np.ones(25)
         return np.concatenate([ramp, flat], axis=0)
+
+
+def uniform_weights(x: int) -> np.ndarray:
+    if x == 0:
+        return np.asarray([])
+    return np.ones(x)
 
 
 class TPESampler(BaseSampler):
@@ -347,6 +357,8 @@ class TPESampler(BaseSampler):
         self._n_startup_trials = n_startup_trials
         self._n_ei_candidates = n_ei_candidates
         self._gamma = gamma
+        if weights_below == "noupper":
+            self._gamma = noupper_gamma
 
         self._warn_independent_sampling = warn_independent_sampling
         self._rng = LazyRandomState(seed)
@@ -382,6 +394,8 @@ class TPESampler(BaseSampler):
 
         if categorical_distance_func is not None:
             warn_experimental_argument("categorical_distance_func")
+
+        self._cache = {}
 
     def reseed_rng(self) -> None:
         self._rng.rng.seed()
@@ -574,7 +588,7 @@ class TPESampler(BaseSampler):
     ) -> _ParzenEstimator:
         observations = self._get_internal_repr(trials, search_space)
         if handle_below and study._is_multi_objective():
-            if self._weights_below == "mo":
+            if self._weights_below in ("mo", "noupper"):
                 param_mask_below = [
                     search_space.keys() <= self._get_params(trial).keys() for trial in trials
                 ]
@@ -588,6 +602,10 @@ class TPESampler(BaseSampler):
             elif self._weights_below == "hyperopt":
                 mpe = self._parzen_estimator_cls(
                     observations, search_space, self._parzen_estimator_parameters
+                )
+            elif self._weights_below == "uniform":
+                mpe = self._parzen_estimator_cls(
+                    observations, search_space, self._parzen_estimator_parameters, uniform_weights(len(trials))
                 )
             elif self._weights_below == "contrib":
                 mpe = self._parzen_estimator_cls(
@@ -609,11 +627,14 @@ class TPESampler(BaseSampler):
         self,
         trials: list[FrozenTrial],
     ) -> np.ndarray:
+        key = tuple(t.number for t in trials)
+        if key in self._cache:
+            return self._cache[key]
         if len(trials) == 1:
             return np.ones(1)
         vals = np.asarray([t.values for t in trials])
         ref_point = _get_reference_point(vals)
-        weights = np.zeros(len(trials))
+        weights = np.full(len(trials), EPS)
         perm = np.arange(len(trials))
         for _ in range(100):
             self._rng.rng.shuffle(perm)
@@ -624,6 +645,7 @@ class TPESampler(BaseSampler):
                 weights[perm[i]] += hv
         weights /= weights.sum()
         weights *= len(trials)
+        self._cache[key] = weights
         return weights
 
     def _compute_acquisition_func(
