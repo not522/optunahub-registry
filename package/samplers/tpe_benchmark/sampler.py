@@ -357,7 +357,7 @@ class TPESampler(BaseSampler):
         self._n_startup_trials = n_startup_trials
         self._n_ei_candidates = n_ei_candidates
         self._gamma = gamma
-        if weights_below == "noupper":
+        if weights_below in ("noupper", "noupper_uniform"):
             self._gamma = noupper_gamma
 
         self._warn_independent_sampling = warn_independent_sampling
@@ -603,7 +603,7 @@ class TPESampler(BaseSampler):
                 mpe = self._parzen_estimator_cls(
                     observations, search_space, self._parzen_estimator_parameters
                 )
-            elif self._weights_below == "uniform":
+            elif self._weights_below in ("uniform", "noupper_uniform"):
                 mpe = self._parzen_estimator_cls(
                     observations, search_space, self._parzen_estimator_parameters, uniform_weights(len(trials))
                 )
