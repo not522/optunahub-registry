@@ -813,11 +813,26 @@ def _split_complete_trials_multi_objective(
     assert 0 < n_below < len(trials)
     lvals = np.array([trial.values for trial in trials])
     lvals *= [-1.0 if d == StudyDirection.MAXIMIZE else 1.0 for d in study.directions]
+
+    below_indices_set = _split_complete_trials_multi_objective_with_cache(tuple(lvals.ravel()), len(study.directions), n_below)
+    below_trials = [trials[i] for i in range(len(trials)) if i in below_indices_set]
+    above_trials = [trials[i] for i in range(len(trials)) if i not in below_indices_set]
+    return below_trials, above_trials
+
+
+@lru_cache(maxsize=1)
+def _split_complete_trials_multi_objective_with_cache(
+    lvals: tuple[float, ...],
+    n_obj: int,
+    n_below: int,
+) -> set:
+    n_trials = len(lvals) // n_obj
+    lvals = np.reshape(lvals, (n_trials, n_obj))
     nondomination_ranks = _fast_non_domination_rank(lvals, n_below=n_below)
     ranks, rank_counts = np.unique(nondomination_ranks, return_counts=True)
     last_rank_before_tiebreak = int(np.max(ranks[np.cumsum(rank_counts) <= n_below], initial=-1))
     assert all(ranks[: last_rank_before_tiebreak + 1] == np.arange(last_rank_before_tiebreak + 1))
-    indices = np.arange(len(trials))
+    indices = np.arange(n_trials)
     indices_below = indices[nondomination_ranks <= last_rank_before_tiebreak]
 
     if indices_below.size < n_below:  # Tie-break with Hypervolume subset selection problem (HSSP).
@@ -833,10 +848,7 @@ def _split_complete_trials_multi_objective(
         )
         indices_below = np.append(indices_below, selected_indices)
 
-    below_indices_set = set(cast(list, indices_below.tolist()))
-    below_trials = [trials[i] for i in range(len(trials)) if i in below_indices_set]
-    above_trials = [trials[i] for i in range(len(trials)) if i not in below_indices_set]
-    return below_trials, above_trials
+    return set(cast(list, indices_below.tolist()))
 
 
 def _get_pruned_trial_score(trial: FrozenTrial, study: Study) -> tuple[float, float]:
@@ -897,6 +909,17 @@ def _calculate_weights_below_for_multi_objective(
 
     lvals = np.asarray([t.values for t in below_trials])[is_feasible]
     lvals *= [-1.0 if d == StudyDirection.MAXIMIZE else 1.0 for d in study.directions]
+    weights_below[is_feasible] = _calculate_weights_below_for_multi_objective_with_cache(tuple(lvals.ravel()), len(study.directions))
+    return weights_below
+
+
+@lru_cache(maxsize=1)
+def _calculate_weights_below_for_multi_objective_with_cache(
+    lvals: tuple[float, ...],
+    n_obj: int,
+) -> np.ndarray:
+    n_below_feasible = len(lvals) // n_obj
+    lvals = np.reshape(lvals, (n_below_feasible, n_obj))
     ref_point = _get_reference_point(lvals)
     on_front = _is_pareto_front(lvals, assume_unique_lexsorted=False)
     pareto_sols = lvals[on_front]
@@ -908,7 +931,7 @@ def _calculate_weights_below_for_multi_objective(
 
     loo_mat = ~np.eye(pareto_sols.shape[0], dtype=bool)  # Leave-one-out bool matrix.
     contribs = np.zeros(n_below_feasible, dtype=float)
-    if len(study.directions) <= 3:
+    if n_obj <= 3:
         contribs[on_front] = [
             hv - compute_hypervolume(pareto_sols[loo], ref_point, assume_pareto=True)
             for loo in loo_mat
@@ -919,8 +942,7 @@ def _calculate_weights_below_for_multi_objective(
         contribs[on_front] -= [
             compute_hypervolume(limited_sols[i, loo], ref_point) for i, loo in enumerate(loo_mat)
         ]
-    weights_below[is_feasible] = np.maximum(contribs / max(np.max(contribs), EPS), EPS)
-    return weights_below
+    return np.maximum(contribs / max(np.max(contribs), EPS), EPS)
 
 
 @lru_cache(maxsize=1)
